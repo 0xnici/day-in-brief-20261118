@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Render a one-page newspaper front page summing up one day's world news.
+"""Typeset one day's world news as a one-page newspaper front page.
 
-Usage: render_news.py <YYYY-MM-DD> <out.png>
-The day's stories are the CONTENT table below — wire reporting of that date,
-rewritten as headlines + two-line briefs. Layout: masthead with the date in
-large type, a 2x3 grid of story panels (region kicker, serif headline,
-brief), and an "also today" strip. Everything is drawn with PIL on system
-fonts; no network, fully deterministic.
+Usage: render.py <YYYY-MM-DD> <out.png>
+
+The CONTENT table below holds the stories: wire reporting of the date,
+rewritten as a headline plus a two-line brief per story, six stories per
+day and a one-line "also today" strip for the rest. The layout is a
+masthead with the weekday and date in large serif type, a 2x3 grid of
+story panels (region kicker, headline, brief), then the strip and a
+colophon. Everything is drawn with PIL on system fonts; there is no
+network access and no randomness, so a day always renders to the same
+PNG bytes.
 """
 import sys
 from PIL import Image, ImageDraw, ImageFont
@@ -69,99 +73,131 @@ CONTENT = {
 
 
 def wrap(draw, text, font, width):
-    words, lines, cur = text.split(), [], ""
-    for w_ in words:
-        trial = (cur + " " + w_).strip()
-        if draw.textlength(trial, font=font) <= width:
-            cur = trial
+    # Greedy word wrap: keep adding words to the current line while the
+    # rendered line still fits the column, then break to a new line.
+    lines = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if draw.textlength(candidate, font=font) <= width:
+            current = candidate
         else:
-            if cur:
-                lines.append(cur)
-            cur = w_
-    if cur:
-        lines.append(cur)
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
     return lines
 
 
 def fit(draw, text, path, start, width, max_lines, minimum=15):
-    size = start
-    while size > minimum:
-        f = ImageFont.truetype(path, size)
-        if len(wrap(draw, text, f, width)) <= max_lines:
-            return f
-        size -= 1
+    # Largest size, starting from `start`, whose wrapped text fits in
+    # `max_lines` lines; never below `minimum`, which is returned as-is.
+    for size in range(start, minimum, -1):
+        font = ImageFont.truetype(path, size)
+        if len(wrap(draw, text, font, width)) <= max_lines:
+            return font
     return ImageFont.truetype(path, minimum)
 
 
-def main():
-    day, out = sys.argv[1], sys.argv[2]
-    c = CONTENT[day]
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
-    inner = W - 2 * MARGIN
+def centered(draw, text, font, y, fill):
+    # Draw one line of text centred on the page width at height y.
+    x = (W - draw.textlength(text, font=font)) / 2
+    draw.text((x, y), text, font=font, fill=fill)
 
-    # Masthead
+
+def draw_masthead(draw, edition):
+    # Kicker, weekday and date stacked in large type, closed by the
+    # double rule every newspaper front page carries. Returns the y the
+    # story grid starts at.
     y = 34
-    fk = ImageFont.truetype(SANS_B, 23)
-    kicker = "THE DAY IN BRIEF · THE WORLD ON ONE PAGE"
-    d.text(((W - d.textlength(kicker, font=fk)) / 2, y), kicker, font=fk, fill=ACCENT)
+    kicker_font = ImageFont.truetype(SANS_B, 23)
+    centered(draw, "THE DAY IN BRIEF · THE WORLD ON ONE PAGE", kicker_font, y, ACCENT)
     y += 40
-    fw = ImageFont.truetype(SERIF_B, 44)
-    d.text(((W - d.textlength(c["weekday"], font=fw)) / 2, y), c["weekday"], font=fw, fill=INK)
+    weekday_font = ImageFont.truetype(SERIF_B, 44)
+    centered(draw, edition["weekday"], weekday_font, y, INK)
     y += 54
-    fd = ImageFont.truetype(SERIF_B, 63)
-    d.text(((W - d.textlength(c["dateline"], font=fd)) / 2, y), c["dateline"], font=fd, fill=INK)
+    dateline_font = ImageFont.truetype(SERIF_B, 63)
+    centered(draw, edition["dateline"], dateline_font, y, INK)
     y += 84
-    d.rectangle([MARGIN, y, W - MARGIN, y + 5], fill=RULE)
-    d.rectangle([MARGIN, y + 9, W - MARGIN, y + 11], fill=RULE)
-    y += 26
+    draw.rectangle([MARGIN, y, W - MARGIN, y + 5], fill=RULE)
+    draw.rectangle([MARGIN, y + 9, W - MARGIN, y + 11], fill=RULE)
+    return y + 26
 
-    # Story grid: 2 columns x 3 rows
+
+def draw_story_panel(draw, story, cx, cy, col_w, row_h, index):
+    # One panel: accent kicker, a fitted serif headline, a fitted brief,
+    # then the hairline dividers that separate it from its neighbours.
+    kicker, headline, brief = story
+    kicker_font = ImageFont.truetype(SANS_B, 19)
+    draw.text((cx, cy), kicker, font=kicker_font, fill=ACCENT)
+
+    headline_font = fit(draw, headline, SERIF_B, 29, col_w, 2)
+    y = cy + 30
+    for line in wrap(draw, headline, headline_font, col_w):
+        draw.text((cx, y), line, font=headline_font, fill=INK)
+        y += 34
+
+    brief_font = fit(draw, brief, SERIF, 20, col_w, 4)
+    y += 2
+    for line in wrap(draw, brief, brief_font, col_w):
+        draw.text((cx, y), line, font=brief_font, fill=(52, 48, 40))
+        y += 25
+
     gap = 26
+    if index % 2 == 0 and index < 5:
+        divider_x = cx + col_w + gap // 2
+        draw.line([divider_x, cy + 2, divider_x, cy + row_h - 18], fill=DIV, width=1)
+    if index < 4:
+        draw.line([cx, cy + row_h - 8, cx + col_w, cy + row_h - 8], fill=DIV, width=1)
+
+
+def draw_story_grid(draw, edition, top):
+    # Six panels in two columns and three rows over a fixed grid height.
+    gap = 26
+    inner = W - 2 * MARGIN
     col_w = (inner - gap) // 2
-    rows_top = y
     grid_h = 636
     row_h = grid_h // 3
-    for i, (kick, head, body) in enumerate(c["stories"]):
-        cx = MARGIN + (i % 2) * (col_w + gap)
-        cy = rows_top + (i // 2) * row_h
-        fkick = ImageFont.truetype(SANS_B, 19)
-        d.text((cx, cy), kick, font=fkick, fill=ACCENT)
-        fh = fit(d, head, SERIF_B, 29, col_w, 2)
-        yy = cy + 30
-        for line in wrap(d, head, fh, col_w):
-            d.text((cx, yy), line, font=fh, fill=INK)
-            yy += 34
-        fb = fit(d, body, SERIF, 20, col_w, 4)
-        yy += 2
-        for line in wrap(d, body, fb, col_w):
-            d.text((cx, yy), line, font=fb, fill=(52, 48, 40))
-            yy += 25
-        if i % 2 == 0 and i < 5:
-            d.line([cx + col_w + gap // 2, cy + 2, cx + col_w + gap // 2, cy + row_h - 18], fill=DIV, width=1)
-        if i < 4:
-            d.line([cx, cy + row_h - 8, cx + col_w, cy + row_h - 8], fill=DIV, width=1)
+    for index, story in enumerate(edition["stories"]):
+        cx = MARGIN + (index % 2) * (col_w + gap)
+        cy = top + (index // 2) * row_h
+        draw_story_panel(draw, story, cx, cy, col_w, row_h, index)
+    return top + grid_h
 
-    # Also-today strip + colophon
-    y = rows_top + grid_h + 10
-    d.rectangle([MARGIN, y, W - MARGIN, y + 3], fill=RULE)
+
+def draw_closing_strip(draw, edition, grid_bottom):
+    # The "also today" strip under a heavy rule, and the colophon that
+    # closes the page: sources, and the promise nothing here is invented.
+    inner = W - 2 * MARGIN
+    y = grid_bottom + 10
+    draw.rectangle([MARGIN, y, W - MARGIN, y + 3], fill=RULE)
     y += 14
-    fa = ImageFont.truetype(SANS_B, 19)
-    d.text((MARGIN, y), "ALSO TODAY", font=fa, fill=ACCENT)
+    strip_font = ImageFont.truetype(SANS_B, 19)
+    draw.text((MARGIN, y), "ALSO TODAY", font=strip_font, fill=ACCENT)
     y += 28
-    fb2 = fit(d, c["also"], SANS, 19, inner, 3)
-    for line in wrap(d, c["also"], fb2, inner):
-        d.text((MARGIN, y), line, font=fb2, fill=INK)
+    also_font = fit(draw, edition["also"], SANS, 19, inner, 3)
+    for line in wrap(draw, edition["also"], also_font, inner):
+        draw.text((MARGIN, y), line, font=also_font, fill=INK)
         y += 25
     y += 8
-    d.rectangle([MARGIN, y, W - MARGIN, y + 2], fill=RULE)
+    draw.rectangle([MARGIN, y, W - MARGIN, y + 2], fill=RULE)
     y += 10
-    fc = ImageFont.truetype(SANS, 16)
-    col = "Compiled from the day's wire reporting · One page, the whole day · No story here is invented; figures as reported that day"
-    d.text(((W - d.textlength(col, font=fc)) / 2, y), col, font=fc, fill=FAINT)
+    colophon = "Compiled from the day's wire reporting · One page, the whole day · No story here is invented; figures as reported that day"
+    colophon_font = ImageFont.truetype(SANS, 16)
+    centered(draw, colophon, colophon_font, y, FAINT)
 
-    img.save(out, format="PNG", optimize=True)
-    print("wrote", out)
+
+def main():
+    day, out_path = sys.argv[1], sys.argv[2]
+    edition = CONTENT[day]
+    page = Image.new("RGB", (W, H), PAPER)
+    draw = ImageDraw.Draw(page)
+    grid_top = draw_masthead(draw, edition)
+    grid_bottom = draw_story_grid(draw, edition, grid_top)
+    draw_closing_strip(draw, edition, grid_bottom)
+    page.save(out_path, format="PNG", optimize=True)
+    print("wrote", out_path)
 
 
 if __name__ == "__main__":
