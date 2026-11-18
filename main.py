@@ -18,6 +18,7 @@ $MAKEFUN_OUTPUT_DIR/entry.png when that variable is set). The source file
 never changes, so two runs produce identical bytes.
 """
 
+import hashlib
 import os
 import sys
 
@@ -33,7 +34,14 @@ def main() -> int:
     target = os.path.join(out_dir, "entry.png")
     with open(target, "wb") as f:
         f.write(page)
-    print(f"wrote {target} ({len(page)} bytes)")
+    # Read the file back and prove the bytes on disk are the committed page:
+    # the entry is only valid if the output is that page, unchanged.
+    with open(target, "rb") as f:
+        written = f.read()
+    if written != page:
+        print(f"error: {target} does not match the committed page", file=sys.stderr)
+        return 1
+    print(f"wrote {target} ({len(page)} bytes, sha256 {hashlib.sha256(page).hexdigest()})")
     return 0
 
 
