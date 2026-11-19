@@ -1,204 +1,378 @@
 #!/usr/bin/env python3
-"""Typeset one day's world news as a one-page newspaper front page.
+"""The Day in Brief, Wednesday 18 November 2026 — dense edition.
 
-Usage: render.py <YYYY-MM-DD> <out.png>
+Usage: python3 tools/render.py 2026-11-18 /path/to/entry.png
 
-The CONTENT table below holds the stories: wire reporting of the date,
-rewritten as a headline plus a two-line brief per story, six stories per
-day and a one-line "also today" strip for the rest. The layout is a
-masthead with the weekday and date in large serif type, a 2x3 grid of
-story panels (region kicker, headline, brief), then the strip and a
-colophon. Everything is drawn with PIL on system fonts; there is no
-network access and no randomness, so a day always renders to the same
-PNG bytes.
+The page is typeset by the Page class below: a masthead, the lead story
+with a dotted world map of the day's datelines beside it, a statistics
+band, four columns of stories grouped by region, an in-brief strip and
+a colophon. The STORIES table is the edition's entire editorial input —
+every headline and brief was reported on Wednesday 18 November 2026 —
+and the typesetter invents nothing.
+
+Fixed fonts and geometry, no clock, no randomness, no network: the
+edition renders byte-identically on every run.
 """
+
 import sys
+
 from PIL import Image, ImageDraw, ImageFont
 
-SERIF_B = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
-SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
-SANS_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+PAGE_W = 1024
+PAGE_H = 1024
+EDGE = 36
+SPAN = PAGE_W - 2 * EDGE
 
-PAPER = (248, 244, 233)
-INK = (26, 23, 18)
-ACCENT = (122, 31, 31)
-FAINT = (120, 110, 88)
-RULE = (26, 23, 18)
-DIV = (201, 192, 171)
+PAPER = (250, 247, 240)
+INK = (26, 24, 20)
+TEXT = (52, 48, 40)
+RED = (150, 30, 30)
+RULE = (26, 24, 20)
+HAIR = (203, 195, 180)
+FAINT = (110, 102, 90)
+DOT = (168, 158, 140)
+BAND_BG = (26, 24, 20)
+BAND_FG = (250, 247, 240)
+BAND_DIM = (206, 198, 182)
 
-W = H = 1024
-MARGIN = 46
+FONTS = "/usr/share/fonts/truetype/dejavu"
+SERIF = FONTS + "/DejaVuSerif.ttf"
+SERIF_B = FONTS + "/DejaVuSerif-Bold.ttf"
+SANS = FONTS + "/DejaVuSans.ttf"
+SANS_B = FONTS + "/DejaVuSans-Bold.ttf"
 
-CONTENT = {
-    "2026-11-18": {
-        "weekday": "WEDNESDAY",
-        "dateline": "18 NOVEMBER 2026",
-        "stories": [
-            ("GULF · WAR", "US strikes Iranian missile site on Qeshm Island",
-             "American forces hit a missile site on Qeshm Island in the Strait of Hormuz. Iran answered with drone attacks on Bahrain and Kuwait."),
-            ("UKRAINE · WAR", "Kerch Bridge hit for a second straight day",
-             "Ukraine struck the Crimean Bridge again and part of the road span collapsed, as Kyiv kept up pressure on the artery to occupied Crimea."),
-            ("DIPLOMACY", "Xi and Putin meet in Shenzhen",
-             "China's Xi Jinping and Russia's Vladimir Putin met in Shenzhen ahead of a trilateral summit with President Trump on the sidelines of APEC."),
-            ("US POLITICS", "Peltola wins Alaska — Democrats reach 56 Senate seats",
-             "Democrat Mary Peltola won Alaska's Senate seat, defeating the Republican incumbent and taking her party to 56 seats in the chamber."),
-            ("HEALTH · AFRICA", "Ebola cases more than double in DR Congo",
-             "The outbreak passed 11,000 cases with 5,400 deaths, the UN said — the epidemic more than doubled as response teams struggled to reach the east."),
-            ("MARKETS", "Nvidia revenue doubles to a record",
-             "Nvidia's quarterly revenue doubled on AI chip demand. European shares fell: the CAC 40 lost 1.62% and Germany's DAX 2.08%."),
-        ],
-        "also": "Category 5 Cyclone Xavier hits the Northern Cook Islands · M6.0 quake in Papua New Guinea · Russian plane crash in Siberia kills 19 · Knesset elects Kahana speaker",
-    },
-    "2026-11-17": {
-        "weekday": "TUESDAY",
-        "dateline": "17 NOVEMBER 2026",
-        "stories": [
-            ("GULF · WAR", "US strikes Qeshm Island after Hormuz shipping attacks",
-             "US forces struck targets on Iran's Qeshm Island. The tanker Tara Gas burned off Oman — 24 seafarers evacuated — and Houthi drones hit Saudi pipeline stations."),
-            ("UKRAINE · WAR", "Ukrainian strike closes part of the Crimean Bridge",
-             "A Ukrainian strike collapsed part of the Kerch Bridge roadway. Russia answered with strikes on bridges in Kyiv, escalating the infrastructure war."),
-            ("UNITED STATES", "Outage cascade hits airports, banks and big tech",
-             "An NSA classified communications system went down amid cascading outages at US airports and banks and across Microsoft and Apple services."),
-            ("HEALTH", "US loses measles elimination status",
-             "The Pan American Health Organization stripped the US of measles elimination status as the national case count climbed past 5,400, with 10 deaths."),
-            ("ASIA · DIPLOMACY", "Trump at Quad summit in Manila; leaders in Shenzhen",
-             "President Trump joined the Quad summit in Manila as leaders gathered in Shenzhen. Washington tightened its AI chip export rules."),
-            ("GAZA", "West urges Israel to open Gaza crossings before winter",
-             "Western nations pressed Israel to open Gaza's crossings as winter rains flooded shelters and deepened the humanitarian crisis."),
-        ],
-        "also": "Japan scrambles jets after Russian aircraft violate its airspace · US tightens AI chip export rules · Winter rains flood Gaza shelters",
-    },
-}
+DAY_NAME = "WEDNESDAY"
+DAY_DATE = "18 NOVEMBER 2026"
+
+LEAD_TAG = "SHENZHEN \u00b7 SUMMIT EVE \u00b7 THE LEAD"
+LEAD_TITLE = "Xi greets Trump in Shenzhen; Putin at his side"
+LEAD_BODY = (
+    "Trump lands in Shenzhen on Wednesday and Xi Jinping meets him at "
+    "the airport, with Putin already in the city and the three set to "
+    "sit down together on Thursday. Putin opened with a handshake and "
+    "an attack on Western sanctions; the agenda for the hour they will "
+    "share runs from nuclear arms control to trade. It is the summit's "
+    "eve, and the whole day bent toward it."
+)
+
+STATS = [
+    ("56", "Senate seats for\nthe Democrats"),
+    ("\u20ac45bn", "loan proposed\nfor Ukraine"),
+    ("$3,735", "gold's fourteen-\nmonth low"),
+    ("2nd", "day of closure for\nthe Kerch Bridge"),
+    ("13", "years of waiting\nfor GTA VI"),
+    ("49", "years Voyager 1\nhas been flying"),
+]
+
+STORIES = [
+    ("THE GULF", [
+        ("Iranian drones over Kuwait",
+         "Iranian drones struck at Kuwait on Wednesday, the Gulf's "
+         "second day of fire after the American strike on Qeshm."),
+        ("Qeshm strike, day two",
+         "Iran answers the US strike on its Qeshm Island missile site; "
+         "Bahrain reports interceptions over the Gulf."),
+        ("Kerch Bridge shut again",
+         "The Crimean Bridge stays closed for a second day as damage "
+         "assessment drags on and traffic backs up."),
+    ]),
+    ("EUROPE", [
+        ("EU's \u20ac45bn loan for Ukraine",
+         "Brussels tables a \u20ac45 billion loan for Kyiv's budget, to "
+         "be repaid once Russia pays reparations."),
+        ("Ukraine under fire again",
+         "Russian missile and drone strikes continue across Ukraine as "
+         "winter approaches and the grid strains."),
+    ]),
+    ("AMERICAS", [
+        ("Peltola win makes 56",
+         "Mary Peltola's victory takes the Democrats to 56 Senate "
+         "seats, the party's largest haul in nearly seventy years."),
+        ("Jeffries in line for Speaker",
+         "House Democrats prepare to nominate Hakeem Jeffries, who "
+         "would be the first African-American Speaker."),
+        ("Fed minutes point to hikes",
+         "Minutes of the October meeting, released Wednesday, show "
+         "most officials expecting further rate rises."),
+        ("Outage fallout, day two",
+         "The cascade of US technology outages runs into a second "
+         "day, with agencies and airlines still recovering."),
+    ]),
+    ("HEALTH", [
+        ("US loses measles-free status",
+         "After a year of continuous transmission, the United States "
+         "is stripped of its measles elimination status."),
+        ("Ebola cases double in Congo",
+         "The outbreak in the Democratic Republic of Congo doubles "
+         "again; responders race to ring-fence the zone."),
+    ]),
+    ("ASIA-PACIFIC", [
+        ("Putin lands for summit eve",
+         "Putin arrives in Shenzhen ready to lift relations with "
+         "China, attacking sanctions as a failed policy."),
+        ("Xi's open-trade call",
+         "Xi uses the APEC stage to call for open trade and wider "
+         "market access across the Pacific."),
+        ("Cyclone Akvan strengthens",
+         "The Bay of Bengal storm gathers strength on a path toward "
+         "the Andhra Pradesh coast."),
+        ("Bangladesh on edge",
+         "Dhaka stays tense as Hasina's Awami League protests build "
+         "and security forces deploy in the capital."),
+    ]),
+    ("MARKETS", [
+        ("Gold slides, dollar climbs",
+         "Gold touches $3,735 an ounce, a fourteen-month low, while "
+         "the dollar stands at a nineteen-month high."),
+        ("Oil slips on stock build",
+         "Brent eases about 1% after a surprise build in US crude "
+         "inventories; OPEC+ resolve is questioned."),
+        ("Sensex rally ends",
+         "Indian shares end a two-day rally as profit-booking meets "
+         "caution ahead of the Fed minutes."),
+    ]),
+    ("SCIENCE & TECH", [
+        ("Nvidia's record quarter",
+         "Nvidia posts record results on insatiable AI demand; "
+         "attention turns to Anthropic's IPO pricing."),
+        ("Voyager nears a light-day",
+         "Voyager 1 closes on one light-day from Earth; NASA's "
+         "confirmation briefing is set for Thursday."),
+        ("Microsoft\u2013ByteDance talks",
+         "Microsoft is reported in talks to sell AI services to "
+         "ByteDance, a deal that would need Washington's blessing."),
+        ("Anthropic IPO awaited",
+         "Wall Street waits on the pricing of Anthropic's market "
+         "debut, the year's most watched listing."),
+    ]),
+    ("SPORT & CULTURE", [
+        ("GTA VI: the final countdown",
+         "Gamers count down the last hours to Grand Theft Auto VI's "
+         "global launch, ending a thirteen-year wait."),
+        ("Jollibee goes American",
+         "Jollibee bets on fried chicken to crack the United States, "
+         "announcing a push across American cities."),
+    ]),
+]
+
+BRIEFS = [
+    "Quad foreign ministers meet on the summit sidelines in Shenzhen",
+    "Gaza crossings reopen in part as aid groups press for more",
+    "Thailand and the Philippines sign new trade deals with Washington",
+    "COP31 enters its final stretch in Antalya, language still contested",
+    "A plane comes down in Siberia; a strong quake strikes off Papua New Guinea",
+    "A cyclone brushes the Cook Islands; Israel's Knesset elects a new speaker",
+]
+
+# Dotted world map as row strings; '#' marks land.
+MAP = [
+    "                                                                ",
+    "        #######                                                 ",
+    "     ###########      ##     ##########  ##################     ",
+    "   #############    ####   ############ ####################    ",
+    "  ##############    ####  ###############################       ",
+    "   ############      ##    #############################        ",
+    "    ##########              ##########################          ",
+    "     ########                ###  #################             ",
+    "      ######                  ##    ##############              ",
+    "       #####                        ############                ",
+    "       ####                          ##########                 ",
+    "       ###                            ########                  ",
+    "      ####                             ######                   ",
+    "      ###                               ####        ##          ",
+    "     ####                               ###        ####         ",
+    "     ###                                                ##      ",
+    "                                                                ",
+]
+# (grid column, grid row, caption) for the red dateline markers.
+PINS = [(49, 4, "SHENZHEN"), (38, 5, "QESHM"), (33, 3, "KERCH"), (10, 4, "WASHINGTON")]
+
+# Which sections sit in which column, top to bottom.
+LAYOUT = [
+    ["THE GULF", "EUROPE"],
+    ["AMERICAS", "HEALTH"],
+    ["ASIA-PACIFIC", "MARKETS"],
+    ["SCIENCE & TECH", "SPORT & CULTURE"],
+]
 
 
-def wrap(draw, text, font, width):
-    # Greedy word wrap: keep adding words to the current line while the
-    # rendered line still fits the column, then break to a new line.
-    lines = []
-    current = ""
+def lines_for(draw, text, font, width):
+    out, cur = [], ""
     for word in text.split():
-        candidate = f"{current} {word}".strip()
-        if draw.textlength(candidate, font=font) <= width:
-            current = candidate
+        trial = word if not cur else cur + " " + word
+        if draw.textlength(trial, font=font) <= width:
+            cur = trial
         else:
-            if current:
-                lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines
+            out.append(cur)
+            cur = word
+    if cur:
+        out.append(cur)
+    return out
 
 
-def fit(draw, text, path, start, width, max_lines, minimum=15):
-    # Largest size, starting from `start`, whose wrapped text fits in
-    # `max_lines` lines; never below `minimum`, which is returned as-is.
-    for size in range(start, minimum, -1):
+def shrink_to(draw, text, path, size, width, max_lines):
+    while size > 9:
         font = ImageFont.truetype(path, size)
-        if len(wrap(draw, text, font, width)) <= max_lines:
+        if len(lines_for(draw, text, font, width)) <= max_lines:
             return font
-    return ImageFont.truetype(path, minimum)
+        size -= 1
+    return ImageFont.truetype(path, size)
 
 
-def centered(draw, text, font, y, fill):
-    # Draw one line of text centred on the page width at height y.
-    x = (W - draw.textlength(text, font=font)) / 2
-    draw.text((x, y), text, font=font, fill=fill)
+class Page:
+    def __init__(self):
+        self.img = Image.new("RGB", (PAGE_W, PAGE_H), PAPER)
+        self.d = ImageDraw.Draw(self.img)
 
+    def centre(self, text, font, y, fill):
+        x = (PAGE_W - self.d.textlength(text, font=font)) / 2
+        self.d.text((x, y), text, font=font, fill=fill)
 
-def draw_masthead(draw, edition):
-    # Kicker, weekday and date stacked in large type, closed by the
-    # double rule every newspaper front page carries. Returns the y the
-    # story grid starts at.
-    y = 34
-    kicker_font = ImageFont.truetype(SANS_B, 23)
-    centered(draw, "THE DAY IN BRIEF · THE WORLD ON ONE PAGE", kicker_font, y, ACCENT)
-    y += 40
-    weekday_font = ImageFont.truetype(SERIF_B, 44)
-    centered(draw, edition["weekday"], weekday_font, y, INK)
-    y += 54
-    dateline_font = ImageFont.truetype(SERIF_B, 63)
-    centered(draw, edition["dateline"], dateline_font, y, INK)
-    y += 84
-    draw.rectangle([MARGIN, y, W - MARGIN, y + 5], fill=RULE)
-    draw.rectangle([MARGIN, y + 9, W - MARGIN, y + 11], fill=RULE)
-    return y + 26
+    def masthead(self):
+        d = self.d
+        y = 20
+        self.centre("THE DAY IN BRIEF \u00b7 THE WORLD ON ONE PAGE", ImageFont.truetype(SANS_B, 19), y, RED)
+        y += 28
+        self.centre(f"{DAY_NAME} {DAY_DATE}", ImageFont.truetype(SERIF_B, 48), y, INK)
+        y += 60
+        d.rectangle([EDGE, y, PAGE_W - EDGE, y + 5], fill=RULE)
+        d.rectangle([EDGE, y + 9, PAGE_W - EDGE, y + 11], fill=RULE)
+        return y + 20
 
+    def world_map(self, x, y, w):
+        d = self.d
+        cell = w / len(MAP[0])
+        for r, row in enumerate(MAP):
+            for c, ch in enumerate(row):
+                if ch == "#":
+                    cx, cy = x + c * cell + cell / 2, y + r * cell + cell / 2
+                    d.ellipse([cx - 1.6, cy - 1.6, cx + 1.6, cy + 1.6], fill=DOT)
+        tag = ImageFont.truetype(SANS_B, 10)
+        for c, r, label in PINS:
+            cx, cy = x + c * cell + cell / 2, y + r * cell + cell / 2
+            d.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=RED)
+            d.text((cx + 7, cy - 6), label, font=tag, fill=RED)
+        return y + int(len(MAP) * cell)
 
-def draw_story_panel(draw, story, cx, cy, col_w, row_h, index):
-    # One panel: accent kicker, a fitted serif headline, a fitted brief,
-    # then the hairline dividers that separate it from its neighbours.
-    kicker, headline, brief = story
-    kicker_font = ImageFont.truetype(SANS_B, 19)
-    draw.text((cx, cy), kicker, font=kicker_font, fill=ACCENT)
+    def lead(self, top):
+        d = self.d
+        text_w = 600
+        d.text((EDGE, top), LEAD_TAG, font=ImageFont.truetype(SANS_B, 16), fill=RED)
+        title_font = shrink_to(d, LEAD_TITLE, SERIF_B, 38, text_w, 2)
+        y = top + 24
+        for line in lines_for(d, LEAD_TITLE, title_font, text_w):
+            d.text((EDGE, y), line, font=title_font, fill=INK)
+            y += 42
+        body_font = ImageFont.truetype(SERIF, 15)
+        y += 2
+        for line in lines_for(d, LEAD_BODY, body_font, text_w):
+            d.text((EDGE, y), line, font=body_font, fill=TEXT)
+            y += 21
+        map_x = EDGE + text_w + 28
+        map_end = self.world_map(map_x, top + 4, SPAN - text_w - 28)
+        d.text((map_x, map_end + 4), "WHERE THE DAY HAPPENED", font=ImageFont.truetype(SANS, 11), fill=FAINT)
+        bottom = max(y, map_end + 22)
+        d.line([EDGE, bottom + 6, PAGE_W - EDGE, bottom + 6], fill=HAIR, width=1)
+        return bottom + 14
 
-    headline_font = fit(draw, headline, SERIF_B, 29, col_w, 2)
-    y = cy + 30
-    for line in wrap(draw, headline, headline_font, col_w):
-        draw.text((cx, y), line, font=headline_font, fill=INK)
-        y += 34
+    def stats_band(self, top):
+        d = self.d
+        d.rectangle([EDGE, top, PAGE_W - EDGE, top + 68], fill=BAND_BG)
+        d.text((EDGE + 12, top + 5), "THE DAY IN NUMBERS", font=ImageFont.truetype(SANS_B, 11), fill=BAND_DIM)
+        col_w = SPAN / len(STATS)
+        big = ImageFont.truetype(SERIF_B, 21)
+        small = ImageFont.truetype(SANS, 9)
+        for i, (figure, caption) in enumerate(STATS):
+            x = EDGE + 12 + i * col_w
+            d.text((x, top + 19), figure, font=big, fill=BAND_FG)
+            for j, line in enumerate(caption.split("\n")):
+                d.text((x, top + 45 + j * 11), line, font=small, fill=BAND_DIM)
+        return top + 76
 
-    brief_font = fit(draw, brief, SERIF, 20, col_w, 4)
-    y += 2
-    for line in wrap(draw, brief, brief_font, col_w):
-        draw.text((cx, y), line, font=brief_font, fill=(52, 48, 40))
-        y += 25
+    def story(self, headline, brief, x, y, w):
+        d = self.d
+        head = shrink_to(d, headline, SANS_B, 14, w, 2)
+        for line in lines_for(d, headline, head, w):
+            d.text((x, y), line, font=head, fill=INK)
+            y += 15
+        body = shrink_to(d, brief, SERIF, 11, w, 3)
+        y += 1
+        for line in lines_for(d, brief, body, w):
+            d.text((x, y), line, font=body, fill=TEXT)
+            y += 12
+        return y + 5
 
-    gap = 26
-    if index % 2 == 0 and index < 5:
-        divider_x = cx + col_w + gap // 2
-        draw.line([divider_x, cy + 2, divider_x, cy + row_h - 18], fill=DIV, width=1)
-    if index < 4:
-        draw.line([cx, cy + row_h - 8, cx + col_w, cy + row_h - 8], fill=DIV, width=1)
+    def section(self, name, items, x, y, w):
+        d = self.d
+        d.text((x, y), name, font=ImageFont.truetype(SANS_B, 13), fill=RED)
+        y += 17
+        d.line([x, y, x + w, y], fill=HAIR, width=1)
+        y += 5
+        for headline, brief in items:
+            y = self.story(headline, brief, x, y, w)
+        return y
 
+    def columns(self, top):
+        d = self.d
+        by_name = dict(STORIES)
+        gap = 22
+        col_w = (SPAN - 3 * gap) // 4
+        bottom = top
+        for i, names in enumerate(LAYOUT):
+            x = EDGE + i * (col_w + gap)
+            y = top
+            for name in names:
+                y = self.section(name, by_name[name], x, y, col_w)
+                y += 6
+            bottom = max(bottom, y)
+            if i < 3:
+                vx = x + col_w + gap // 2
+                d.line([vx, top, vx, bottom], fill=HAIR, width=1)
+        return bottom
 
-def draw_story_grid(draw, edition, top):
-    # Six panels in two columns and three rows over a fixed grid height.
-    gap = 26
-    inner = W - 2 * MARGIN
-    col_w = (inner - gap) // 2
-    grid_h = 636
-    row_h = grid_h // 3
-    for index, story in enumerate(edition["stories"]):
-        cx = MARGIN + (index % 2) * (col_w + gap)
-        cy = top + (index // 2) * row_h
-        draw_story_panel(draw, story, cx, cy, col_w, row_h, index)
-    return top + grid_h
+    def brief_strip(self, top):
+        d = self.d
+        d.text((EDGE, top), "IN BRIEF", font=ImageFont.truetype(SANS_B, 13), fill=RED)
+        font = ImageFont.truetype(SANS, 12)
+        y, x = top + 20, EDGE
+        for item in BRIEFS:
+            text = item + "   \u00b7   "
+            width = d.textlength(text, font=font)
+            if x + width > PAGE_W - EDGE:
+                y += 17
+                x = EDGE
+            d.text((x, y), text, font=font, fill=TEXT)
+            x += width
+        return y + 17
 
+    def colophon(self):
+        d = self.d
+        top = PAGE_H - 34
+        d.rectangle([EDGE, top, PAGE_W - EDGE, top + 2], fill=RULE)
+        line = "Compiled from the day's wire reporting \u00b7 One page, the whole day \u00b7 No story here is invented; figures as reported that day"
+        font = ImageFont.truetype(SANS, 12)
+        x = (PAGE_W - d.textlength(line, font=font)) / 2
+        d.text((x, top + 8), line, font=font, fill=FAINT)
 
-def draw_closing_strip(draw, edition, grid_bottom):
-    # The "also today" strip under a heavy rule, and the colophon that
-    # closes the page: sources, and the promise nothing here is invented.
-    inner = W - 2 * MARGIN
-    y = grid_bottom + 10
-    draw.rectangle([MARGIN, y, W - MARGIN, y + 3], fill=RULE)
-    y += 14
-    strip_font = ImageFont.truetype(SANS_B, 19)
-    draw.text((MARGIN, y), "ALSO TODAY", font=strip_font, fill=ACCENT)
-    y += 28
-    also_font = fit(draw, edition["also"], SANS, 19, inner, 3)
-    for line in wrap(draw, edition["also"], also_font, inner):
-        draw.text((MARGIN, y), line, font=also_font, fill=INK)
-        y += 25
-    y += 8
-    draw.rectangle([MARGIN, y, W - MARGIN, y + 2], fill=RULE)
-    y += 10
-    colophon = "Compiled from the day's wire reporting · One page, the whole day · No story here is invented; figures as reported that day"
-    colophon_font = ImageFont.truetype(SANS, 16)
-    centered(draw, colophon, colophon_font, y, FAINT)
+    def render(self, out_path):
+        y = self.masthead()
+        y = self.lead(y)
+        y = self.stats_band(y)
+        y = self.columns(y + 2)
+        self.brief_strip(y + 4)
+        self.colophon()
+        self.img.save(out_path, format="PNG", optimize=True)
+        print("wrote", out_path)
 
 
 def main():
     day, out_path = sys.argv[1], sys.argv[2]
-    edition = CONTENT[day]
-    page = Image.new("RGB", (W, H), PAPER)
-    draw = ImageDraw.Draw(page)
-    grid_top = draw_masthead(draw, edition)
-    grid_bottom = draw_story_grid(draw, edition, grid_top)
-    draw_closing_strip(draw, edition, grid_bottom)
-    page.save(out_path, format="PNG", optimize=True)
-    print("wrote", out_path)
+    if day != "2026-11-18":
+        print("error: this typesetter carries only the 2026-11-18 edition", file=sys.stderr)
+        return 1
+    Page().render(out_path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
